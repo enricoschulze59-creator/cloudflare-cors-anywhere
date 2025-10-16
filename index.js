@@ -129,13 +129,6 @@ addEventListener("fetch", async event => {
                 }
 
                 return new Response(
-                    "CLOUDFLARE-CORS-ANYWHERE\n\n" +
-                    "Source:\nhttps://github.com/Zibri/cloudflare-cors-anywhere\n\n" +
-                    "Usage:\n" +
-                    originUrl.origin + "/?uri\n\n" +
-                    "Donate:\nhttps://paypal.me/Zibri/5\n\n" +
-                    "Limits: 100,000 requests/day\n" +
-                    "          1,000 requests/10 minutes\n\n" +
                     (originHeader !== null ? "Origin: " + originHeader + "\n" : "") +
                     "IP: " + connectingIp + "\n" +
                     (country ? "Country: " + country + "\n" : "") +
@@ -150,10 +143,6 @@ addEventListener("fetch", async event => {
             }
         } else {
             return new Response(
-                "Create your own CORS proxy</br>\n" +
-                "<a href='https://github.com/Zibri/cloudflare-cors-anywhere'>https://github.com/Zibri/cloudflare-cors-anywhere</a></br>\n" +
-                "\nDonate</br>\n" +
-                "<a href='https://paypal.me/Zibri/5'>https://paypal.me/Zibri/5</a>\n",
                 {
                     status: 403,
                     statusText: 'Forbidden',
