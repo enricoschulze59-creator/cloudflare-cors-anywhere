@@ -1,156 +1,72 @@
-/*
-CORS Anywhere as a Cloudflare Worker!
-(c) 2019 by Zibri (www.zibri.org)
-email: zibri AT zibri DOT org
-https://github.com/Zibri/cloudflare-cors-anywhere
+// Cloudflare Worker: Auth-CORS Proxy
+// by ChatGPT (GPT-5)
+// Funktion: Leitet Anfragen an externe APIs weiter und hängt automatisch
+// die Header "Authorization" und "Accept" an.
+// Aufruf: https://dein-worker.workers.dev/?https://ziel-url.com/pfad
 
-This Cloudflare Worker script acts as a CORS proxy that allows
-cross-origin resource sharing for specified origins and URLs.
-It handles OPTIONS preflight requests and modifies response headers accordingly to enable CORS.
-The script also includes functionality to parse custom headers and provide detailed information
-about the CORS proxy service when accessed without specific parameters.
-The script is configurable with whitelist and blacklist patterns, although the blacklist feature is currently unused.
-The main goal is to facilitate cross-origin requests while enforcing specific security and rate-limiting policies.
-*/
+// ⚙️ Dein API Token hier eintragen:
+const token = "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJodHRwczovL21hcmluZXRyYWZmaWMuY29tL3VzZXJJZCI6Nzk1ODk3OCwiaHR0cHM6Ly9tYXJpbmV0cmFmZmljLmNvbS9lbWFpbCI6InNjaHVsemVlbnJpY28yMTRAZ21haWwuY29tIiwiaXNzIjoiaHR0cHM6Ly9hdXRoLmtwbGVyLmNvbS8iLCJzdWIiOiJnb29nbGUtb2F1dGgyfDEwMjA5Nzk2MTIzNDc1NjQyOTkzMSIsImF1ZCI6WyJodHRwczovL21hcmluZXRyYWZmaWMuY29tIiwiaHR0cHM6Ly9rcGxlci1wcm9kLmV1LmF1dGgwLmNvbS91c2VyaW5mbyJdLCJpYXQiOjE3NjExNzEzMjMsImV4cCI6MTc2MTE3MTkyMywic2NvcGUiOiJvcGVuaWQgcHJvZmlsZSBlbWFpbCBvZmZsaW5lX2FjY2VzcyIsImF6cCI6IkQyRmg2cFlpWUFTYWhNdE1XNXhTYWhFclpCa0xmMTF3In0.I2LzRgScIdx6wTH_JUPyU9-v2pqhJ7PsEAtuHprwqR6hzdTgApmoqvw5m2sjqlyqnT7L2rYFnkP1URqC_fGTBhCrnnWnpUVCERZ9Y2bl0oRj4Ohv14XGjT2VRonjioEvm3Xn-4niKOSCfnXjVRA_opCc2JXFKs5FFCgbIrxO5jMBJfXLC2vymoPUUt6xc1e-3p2xkxFWjzjh-1xVOViHHobPOfnIWW9rP-sG5H-U8BOeFEfiKtv00J2e2G4QSP1q-HMIQg9VPYoyj_1Iq2dc3CgiBEmpxsiUJuwIxiEf-iBSzQHTjYVjSVcG7vKszqQrG05PwMryqRT69icYk8rYog"; // z. B. eyJhbGciOi...
 
-// Configuration: Whitelist and Blacklist (not used in this version)
-// whitelist = [ "^http.?://www.zibri.org$", "zibri.org$", "test\\..*" ];  // regexp for whitelisted urls
-const blacklistUrls = [];           // regexp for blacklisted urls
-const whitelistOrigins = [ ".*" ];   // regexp for whitelisted origins
-
-// Function to check if a given URI or origin is listed in the whitelist or blacklist
-function isListedInWhitelist(uri, listing) {
-    let isListed = false;
-    if (typeof uri === "string") {
-        listing.forEach((pattern) => {
-            if (uri.match(pattern) !== null) {
-                isListed = true;
-            }
-        });
-    } else {
-        // When URI is null (e.g., when Origin header is missing), decide based on the implementation
-        isListed = true; // true accepts null origins, false would reject them
-    }
-    return isListed;
-}
-
-// Event listener for incoming fetch requests
-addEventListener("fetch", async event => {
-    event.respondWith((async function() {
-        const isPreflightRequest = (event.request.method === "OPTIONS");
-        
-        const originUrl = new URL(event.request.url);
-
-        // Function to modify headers to enable CORS
-        function setupCORSHeaders(headers) {
-            headers.set("Access-Control-Allow-Origin", event.request.headers.get("Origin"));
-            if (isPreflightRequest) {
-                headers.set("Access-Control-Allow-Methods", event.request.headers.get("access-control-request-method"));
-                const requestedHeaders = event.request.headers.get("access-control-request-headers");
-
-                if (requestedHeaders) {
-                    headers.set("Access-Control-Allow-Headers", requestedHeaders);
-                }
-
-                headers.delete("X-Content-Type-Options"); // Remove X-Content-Type-Options header
-            }
-            return headers;
-        }
-
-        const targetUrl = decodeURIComponent(decodeURIComponent(originUrl.search.substr(1)));
-
-        const originHeader = event.request.headers.get("Origin");
-        const connectingIp = event.request.headers.get("CF-Connecting-IP");
-
-        if ((!isListedInWhitelist(targetUrl, blacklistUrls)) && (isListedInWhitelist(originHeader, whitelistOrigins))) {
-            let customHeaders = event.request.headers.get("x-cors-headers");
-
-            if (customHeaders !== null) {
-                try {
-                    customHeaders = JSON.parse(customHeaders);
-                } catch (e) {}
-            }
-
-            if (originUrl.search.startsWith("?")) {
-                const filteredHeaders = {};
-                for (const [key, value] of event.request.headers.entries()) {
-                    if (
-                        (key.match("^origin") === null) &&
-                        (key.match("eferer") === null) &&
-                        (key.match("^cf-") === null) &&
-                        (key.match("^x-forw") === null) &&
-                        (key.match("^x-cors-headers") === null)
-                    ) {
-                        filteredHeaders[key] = value;
-                    }
-                }
-
-                if (customHeaders !== null) {
-                    Object.entries(customHeaders).forEach((entry) => (filteredHeaders[entry[0]] = entry[1]));
-                }
-
-                const newRequest = new Request(event.request, {
-                    redirect: "follow",
-                    headers: filteredHeaders
-                });
-
-                const response = await fetch(targetUrl, newRequest);
-                var responseHeaders = new Headers(response.headers);
-                const exposedHeaders = [];
-                const allResponseHeaders = {};
-                for (const [key, value] of response.headers.entries()) {
-                    exposedHeaders.push(key);
-                    allResponseHeaders[key] = value;
-                }
-                exposedHeaders.push("cors-received-headers");
-                responseHeaders = setupCORSHeaders(responseHeaders);
-
-                responseHeaders.set("Access-Control-Expose-Headers", exposedHeaders.join(","));
-                responseHeaders.set("cors-received-headers", JSON.stringify(allResponseHeaders));
-
-                const responseBody = isPreflightRequest ? null : await response.arrayBuffer();
-
-                const responseInit = {
-                    headers: responseHeaders,
-                    status: isPreflightRequest ? 200 : response.status,
-                    statusText: isPreflightRequest ? "OK" : response.statusText
-                };
-                return new Response(responseBody, responseInit);
-
-            } else {
-                var responseHeaders = new Headers();
-                responseHeaders = setupCORSHeaders(responseHeaders);
-
-                let country = false;
-                let colo = false;
-                if (typeof event.request.cf !== "undefined") {
-                    country = event.request.cf.country || false;
-                    colo = event.request.cf.colo || false;
-                }
-
-                return new Response(
-                    (originHeader !== null ? "Origin: " + originHeader + "\n" : "") +
-                    "IP: " + connectingIp + "\n" +
-                    (country ? "Country: " + country + "\n" : "") +
-                    (colo ? "Datacenter: " + colo + "\n" : "") +
-                    "\n" +
-                    (customHeaders !== null ? "\nx-cors-headers: " + JSON.stringify(customHeaders) : ""),
-                    {
-                        status: 200,
-                        headers: responseHeaders
-                    }
-                );
-            }
-        } else {
-            return new Response(
-                {
-                    status: 403,
-                    statusText: 'Forbidden',
-                    headers: {
-                        "Content-Type": "text/html"
-                    }
-                }
-            );
-        }
-    })());
+addEventListener("fetch", event => {
+  event.respondWith(handleRequest(event));
 });
+
+async function handleRequest(event) {
+  const request = event.request;
+  const url = new URL(request.url);
+  const target = decodeURIComponent(url.search.slice(1));
+
+  if (!target || !target.startsWith("http")) {
+    return new Response(
+      "Usage:\n  https://dein-worker.workers.dev/?https://ziel-url.com/api\n",
+      { status: 400, headers: { "Content-Type": "text/plain" } }
+    );
+  }
+
+  // Ursprüngliche Headers übernehmen
+  const headers = new Headers(request.headers);
+
+  // Eigene Header erzwingen
+  headers.set("Authorization", `Bearer ${token}`);
+  headers.set("Accept", "application/json");
+
+  // Request an Ziel weiterleiten
+  const init = {
+    method: request.method,
+    headers,
+    body:
+      request.method !== "GET" &&
+      request.method !== "HEAD" &&
+      request.body
+        ? await request.text()
+        : undefined,
+    redirect: "follow",
+  };
+
+  let response;
+  try {
+    response = await fetch(target, init);
+  } catch (err) {
+    return new Response("Fetch error: " + err.message, { status: 502 });
+  }
+
+  // CORS-Header hinzufügen
+  const corsHeaders = {
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Methods": "GET,HEAD,POST,OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type, Authorization, *",
+  };
+
+  const newHeaders = new Headers(response.headers);
+  for (const [key, value] of Object.entries(corsHeaders)) {
+    newHeaders.set(key, value);
+  }
+
+  const body = await response.arrayBuffer();
+
+  return new Response(body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers: newHeaders,
+  });
+}
