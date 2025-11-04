@@ -5,7 +5,7 @@
 // Aufruf: https://dein-worker.workers.dev/?https://ziel-url.com/pfad
 
 // ⚙️ Dein API Token hier eintragen:
-const token = "4f0fd9f18abbe3cf0e87fdb556bc39c8";
+const token = "nG6o2LHug8Sbqo2dy7MdE1T1OHzobu5d";
 
 addEventListener("fetch", event => {
   event.respondWith(handleRequest(event));
