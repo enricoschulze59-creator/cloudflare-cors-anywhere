@@ -27,7 +27,7 @@ async function handleRequest(event) {
   const headers = new Headers(request.headers);
 
   // Eigene Header erzwingen
-  headers.set("Authorization", `Bearer ${token}`);
+  headers.set("x-api-key", `${token}`);
   headers.set("Accept", "application/json");
 
   // Request an Ziel weiterleiten
