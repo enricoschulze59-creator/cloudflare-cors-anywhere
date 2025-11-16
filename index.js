@@ -1,5 +1,5 @@
-// Cloudflare Worker: Fixed Joyn Proxy - Using Only Your Headers
-// Verwendet ausschließlich die Header die du bereitgestellt hast
+// Cloudflare Worker: Complete Proxy with Joyn Headers
+// Behält alle Proxy-Funktionen bei und verwendet deine Joyn Headers korrekt
 
 const YOUR_JOYN_HEADERS = {
   'accept': '*/*',
@@ -79,14 +79,14 @@ async function handleRequest(event) {
     
     if (!target || !target.startsWith("http")) {
       return new Response(
-        "Usage:\n  https://dein-worker.workers.dev/?url=https://ziel-url.com",
+        "Usage:\n  https://dein-worker.workers.dev/?url=https://ziel-url.com\n\nComplete Proxy with Joyn Headers",
         { status: 400, headers: { "Content-Type": "text/plain" } }
       );
     }
     targetUrl = new URL(target);
   }
 
-  // Request vorbereiten - KEINE zusätzlichen Header außer den deinen
+  // Request vorbereiten
   const headers = new Headers();
   
   // Joyn API Headers NUR für Joyn-Domains
@@ -98,19 +98,16 @@ async function handleRequest(event) {
     for (const [key, value] of Object.entries(YOUR_JOYN_HEADERS)) {
       headers.set(key, value);
     }
-    
-    // Origin auf die echte Joyn URL setzen
-    headers.set('origin', 'https://www.joyn.de');
-    headers.set('referer', 'https://www.joyn.de/');
-    
   } else {
     // Für nicht-Joyn Domains: Standard Header
     const originalHeaders = new Headers(request.headers);
-    originalHeaders.delete("Origin");
-    originalHeaders.delete("Referer");
     headers.set("Host", targetUrl.host);
     headers.set("Accept", "application/json,text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8");
     headers.set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36");
+    
+    // Origin und Referer für die Zielseite anpassen
+    headers.set("Origin", targetUrl.origin);
+    headers.set("Referer", targetUrl.origin + "/");
   }
 
   const init = {
@@ -129,20 +126,235 @@ async function handleRequest(event) {
     return new Response("Fetch error: " + err.message, { status: 502 });
   }
 
-  // Vereinfachte Response Behandlung - nur das Nötigste
-  const newHeaders = new Headers(response.headers);
-  newHeaders.delete('X-Frame-Options');
-  newHeaders.delete('Content-Security-Policy');
-  newHeaders.delete('Frame-Options');
-  newHeaders.set('Access-Control-Allow-Origin', '*');
-  newHeaders.set('Access-Control-Allow-Methods', 'GET, HEAD, POST, PUT, DELETE, OPTIONS');
-  newHeaders.set('Access-Control-Allow-Headers', 'Content-Type, Authorization, *');
+  const contentType = response.headers.get("content-type") || "";
+  
+  if (contentType.includes("text/html") && !isDirectResourceRequest) {
+    // HTML Inhalt - umfassende Modifikation
+    let body = await response.text();
+    
+    // Base URL setzen
+    const baseHref = `<base href="${targetUrl.origin}/">`;
+    if (body.includes('<head>')) {
+      body = body.replace('<head>', `<head>${baseHref}`);
+    } else if (body.includes('<head ')) {
+      body = body.replace(/<head[^>]*>/, `$&${baseHref}`);
+    }
 
-  const body = await response.arrayBuffer();
+    // Proxy Base URL
+    const proxyBase = `${url.origin}/?url=`;
+    
+    // 1. Alle Resource-URLs durch Proxy leiten
+    body = body.replace(
+      /(href|src|action)=["'](\/[^"']*)["']/gi,
+      (match, attr, path) => {
+        const fullUrl = targetUrl.origin + path;
+        return `${attr}="${proxyBase}${encodeURIComponent(fullUrl)}"`;
+      }
+    );
 
-  return new Response(body, {
-    status: response.status,
-    statusText: response.statusText,
-    headers: newHeaders,
-  });
+    // 2. Relative Pfade
+    body = body.replace(
+      /(href|src|action)=["']((?!https?:\/\/|data:)([^"':][^"']*))["']/gi,
+      (match, attr, path) => {
+        if (path.startsWith('/')) return match;
+        const basePath = targetUrl.pathname.endsWith('/') ? targetUrl.pathname : 
+                         targetUrl.pathname.split('/').slice(0, -1).join('/') + '/';
+        const fullUrl = targetUrl.origin + basePath + path;
+        return `${attr}="${proxyBase}${encodeURIComponent(fullUrl)}"`;
+      }
+    );
+
+    // 3. CSS URLs
+    body = body.replace(
+      /url\(['"]?(\/[^)'"]*)['"]?\)/gi,
+      (match, path) => {
+        const fullUrl = targetUrl.origin + path;
+        return `url("${proxyBase}${encodeURIComponent(fullUrl)}")`;
+      }
+    );
+
+    // 4. JavaScript patchen
+    body = body.replace(
+      /<script\b[^>]*>[\s\S]*?<\/script>/gi,
+      (match) => {
+        if (match.includes('src=')) {
+          return match.replace(
+            /src=["']([^"']*)["']/gi,
+            (srcMatch, srcPath) => {
+              if (srcPath.startsWith('http')) {
+                return srcMatch;
+              }
+              const fullUrl = srcPath.startsWith('/') ? targetUrl.origin + srcPath : 
+                             targetUrl.origin + '/' + srcPath;
+              return `src="${proxyBase}${encodeURIComponent(fullUrl)}"`;
+            }
+          );
+        }
+        return match;
+      }
+    );
+
+    // 5. Meta Tags für Security anpassen
+    body = body.replace(
+      /<meta[^>]*content-security-policy[^>]*>/gi,
+      '' // CSP entfernen
+    );
+
+    // 6. Window.name Script injizieren um Origin Probleme zu lösen
+    const fixScript = `
+    <script>
+    // Fix für History API und Origin Probleme
+    (function() {
+      // Proxy für History API
+      const originalReplaceState = history.replaceState;
+      const originalPushState = history.pushState;
+      
+      history.replaceState = function(state, title, url) {
+        try {
+          return originalReplaceState.call(this, state, title, url);
+        } catch (e) {
+          console.warn('History API blocked:', e);
+          return originalReplaceState.call(this, state, title, undefined);
+        }
+      };
+      
+      history.pushState = function(state, title, url) {
+        try {
+          return originalPushState.call(this, state, title, url);
+        } catch (e) {
+          console.warn('History API blocked:', e);
+          return originalPushState.call(this, state, title, undefined);
+        }
+      };
+      
+      // Fetch API wrapper für CORS
+      const originalFetch = window.fetch;
+      window.fetch = function(resource, init) {
+        if (typeof resource === 'string' && !resource.startsWith('${url.origin}')) {
+          // Durch Proxy leiten
+          const proxyUrl = '${proxyBase}' + encodeURIComponent(resource);
+          return originalFetch.call(this, proxyUrl, init);
+        }
+        return originalFetch.call(this, resource, init);
+      };
+      
+      // XMLHttpRequest wrapper
+      const originalXHROpen = XMLHttpRequest.prototype.open;
+      XMLHttpRequest.prototype.open = function(method, url, async, user, password) {
+        if (url && !url.startsWith('${url.origin}') && !url.startsWith('blob:') && !url.startsWith('data:')) {
+          // Durch Proxy leiten
+          url = '${proxyBase}' + encodeURIComponent(url);
+        }
+        return originalXHROpen.call(this, method, url, async, user, password);
+      };
+    })();
+    </script>
+    `;
+
+    // Fix Script in head einfügen
+    body = body.replace('</head>', `${fixScript}</head>`);
+
+    // Response erstellen
+    const newHeaders = new Headers(response.headers);
+    newHeaders.delete('X-Frame-Options');
+    newHeaders.delete('Content-Security-Policy');
+    newHeaders.delete('Frame-Options');
+    newHeaders.set('Access-Control-Allow-Origin', '*');
+    newHeaders.set('Access-Control-Allow-Methods', 'GET, HEAD, POST, PUT, DELETE, OPTIONS');
+    newHeaders.set('Access-Control-Allow-Headers', 'Content-Type, Authorization, *');
+
+    if (!newHeaders.has('Content-Type')) {
+      newHeaders.set('Content-Type', contentType);
+    }
+
+    return new Response(body, {
+      status: response.status,
+      statusText: response.statusText,
+      headers: newHeaders,
+    });
+    
+  } else if (contentType.includes("text/css") && !isDirectResourceRequest) {
+    // CSS Dateien
+    let body = await response.text();
+    const proxyBase = `${url.origin}/?url=`;
+    
+    body = body.replace(
+      /url\(['"]?(\/[^)'"]*)['"]?\)/gi,
+      (match, path) => {
+        return `url("${proxyBase}${encodeURIComponent(targetUrl.origin + path)}")`;
+      }
+    );
+    
+    body = body.replace(
+      /url\(['"]?((?!https?:\/\/|data:)([^)'"]*))['"]?\)/gi,
+      (match, path) => {
+        if (path.startsWith('/')) return match;
+        const basePath = targetUrl.pathname.endsWith('/') ? targetUrl.pathname : 
+                         targetUrl.pathname.split('/').slice(0, -1).join('/') + '/';
+        return `url("${proxyBase}${encodeURIComponent(targetUrl.origin + basePath + path)}")`;
+      }
+    );
+
+    const newHeaders = new Headers(response.headers);
+    newHeaders.delete('X-Frame-Options');
+    newHeaders.delete('Content-Security-Policy');
+    newHeaders.set('Access-Control-Allow-Origin', '*');
+    newHeaders.set('Content-Type', 'text/css');
+
+    return new Response(body, {
+      status: response.status,
+      statusText: response.statusText,
+      headers: newHeaders,
+    });
+    
+  } else if (contentType.includes("application/javascript") && !isDirectResourceRequest) {
+    // JavaScript Dateien - CORS Fehler beheben
+    let body = await response.text();
+    
+    // Fetch API calls patchen
+    body = body.replace(
+      /fetch\((['"])(https?:\/\/[^'"]+)\1/gi,
+      (match, quote, fetchUrl) => {
+        return `fetch(${quote}${url.origin}/?url=${encodeURIComponent(fetchUrl)}${quote}`;
+      }
+    );
+    
+    // XMLHttpRequest patchen
+    body = body.replace(
+      /\.open\((['"])(GET|POST|PUT|DELETE|PATCH)\1\s*,\s*(['"])(https?:\/\/[^'"]+)\3/gi,
+      (match, methodQuote, method, urlQuote, xhrUrl) => {
+        return `.open(${methodQuote}${method}${methodQuote}, ${urlQuote}${url.origin}/?url=${encodeURIComponent(xhrUrl)}${urlQuote}`;
+      }
+    );
+
+    const newHeaders = new Headers(response.headers);
+    newHeaders.delete('X-Frame-Options');
+    newHeaders.delete('Content-Security-Policy');
+    newHeaders.set('Access-Control-Allow-Origin', '*');
+    newHeaders.set('Content-Type', 'application/javascript');
+
+    return new Response(body, {
+      status: response.status,
+      statusText: response.statusText,
+      headers: newHeaders,
+    });
+    
+  } else {
+    // Andere Content-Types
+    const newHeaders = new Headers(response.headers);
+    newHeaders.delete('X-Frame-Options');
+    newHeaders.delete('Content-Security-Policy');
+    newHeaders.delete('Frame-Options');
+    newHeaders.set('Access-Control-Allow-Origin', '*');
+    newHeaders.set('Access-Control-Allow-Methods', 'GET, HEAD, POST, PUT, DELETE, OPTIONS');
+    newHeaders.set('Access-Control-Allow-Headers', 'Content-Type, Authorization, *');
+
+    const body = await response.arrayBuffer();
+
+    return new Response(body, {
+      status: response.status,
+      statusText: response.statusText,
+      headers: newHeaders,
+    });
+  }
 }
