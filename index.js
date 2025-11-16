@@ -1,5 +1,5 @@
-// Cloudflare Worker: Complete Proxy with RSC Support
-// Behandelt _rsc Parameter und alle Joyn-Pfade korrekt
+// Cloudflare Worker: Complete Proxy with Fixed URL Handling
+// Korrigiert alle URL-Probleme
 
 const token = "nG6o2LHug8Sbqo2dy7MdE1T1OHzobu5d";
 
@@ -46,7 +46,6 @@ async function handleRequest(event) {
   const request = event.request;
   const url = new URL(request.url);
   const proxyBase = `${url.origin}/?url=`;
-  const joynBase = 'https://www.joyn.de';
   
   // OPTIONS Request für Preflight handling
   if (request.method === "OPTIONS") {
@@ -61,40 +60,33 @@ async function handleRequest(event) {
   }
 
   // Check if this is a direct path request (starts with / but not /?url=)
-  const hasDirectPath = url.pathname !== '/' && !url.search.includes('url=');
-  const isJoynPath = url.pathname.startsWith('/_next') || 
-                     url.pathname.startsWith('/static') ||
-                     url.pathname.startsWith('/images') ||
-                     url.pathname.startsWith('/assets') ||
-                     url.pathname.startsWith('/play') ||
-                     url.pathname.startsWith('/news') ||
-                     url.pathname.startsWith('/collection') ||
-                     url.pathname.startsWith('/serien') ||
-                     url.pathname.startsWith('/reality') ||
-                     url.pathname.startsWith('/favicon.ico') ||
-                     url.pathname.match(/\.(css|js|svg|png|jpg|jpeg|gif|ico|woff|woff2|ttf|eot)$/);
-
-  const isDirectPathRequest = hasDirectPath && isJoynPath;
+  const isDirectPathRequest = url.pathname !== '/' && !url.search.includes('url=') && 
+                              (url.pathname.startsWith('/_next') || 
+                               url.pathname.startsWith('/static') ||
+                               url.pathname.startsWith('/images') ||
+                               url.pathname.startsWith('/assets') ||
+                               url.pathname.startsWith('/play') ||
+                               url.pathname.startsWith('/news') ||
+                               url.pathname.startsWith('/collection') ||
+                               url.pathname.startsWith('/serien') ||
+                               url.pathname.startsWith('/reality') ||
+                               url.pathname.match(/\.(css|js|svg|png|jpg|jpeg|gif|ico|woff|woff2|ttf|eot)$/));
 
   let targetUrl;
+  let baseDomain = 'https://www.joyn.de';
   
   if (isDirectPathRequest) {
     // Für direkte Pfad-Requests: Konstruiere die komplette Joyn URL
-    console.log(`Direct path request: ${url.pathname}${url.search}`);
-    targetUrl = new URL(url.pathname + url.search, joynBase);
+    targetUrl = new URL(url.pathname + url.search, baseDomain);
   } else {
     // Normale Proxy-Anfrage mit ?url= Parameter
     const target = url.searchParams.get('url') || decodeURIComponent(url.search.slice(1));
     
     if (!target || !target.startsWith("http")) {
-      // Wenn keine URL angegeben, zeige Hilfe
-      if (url.pathname === '/') {
-        return new Response(
-          `Joyn Proxy Worker\n\nVerwendung:\n- Mit URL Parameter: ${url.origin}/?url=https://www.joyn.de\n- Direkte Pfade: ${url.origin}/play/live-tv\n- RSC Requests: ${url.origin}/play/live-tv?_rsc=hars1\n\nUnterstützte Pfade:\n/play/*, /news, /collection/*, /serien/*, /reality, /_next/*, /static/*`,
-          { status: 400, headers: { "Content-Type": "text/plain" } }
-        );
-      }
-      return new Response("Invalid request - use ?url= parameter or direct Joyn paths", { status: 400 });
+      return new Response(
+        "Usage:\n  https://dein-worker.workers.dev/?url=https://ziel-url.com\n\nOder direkte Pfade wie: /play/live-tv, /news, etc.",
+        { status: 400, headers: { "Content-Type": "text/plain" } }
+      );
     }
     targetUrl = new URL(target);
   }
@@ -113,11 +105,12 @@ async function handleRequest(event) {
   // Wenn URL geändert wurde, neue TargetUrl erstellen
   if (rewrittenUrl !== originalUrl) {
     targetUrl = new URL(rewrittenUrl);
-    console.log(`Rewritten URL: ${originalUrl} -> ${rewrittenUrl}`);
   }
 
   // Request vorbereiten
-  const headers = new Headers();
+  const headers = new Headers(request.headers);
+  headers.delete("Origin");
+  headers.delete("Referer");
   headers.set("Host", targetUrl.host);
   headers.set("Accept", "application/json,text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8");
   headers.set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36");
@@ -129,21 +122,6 @@ async function handleRequest(event) {
     for (const [key, value] of Object.entries(JOYN_HEADERS)) {
       headers.set(key, value);
     }
-    
-    // Spezielle Header für RSC Requests
-    if (url.search.includes('_rsc=')) {
-      headers.set('RSC', '1');
-      headers.set('Next-Router-State-Tree', '');
-      headers.set('Next-Url', url.pathname);
-    }
-  } else {
-    // Für nicht-Joyn Requests, originale Header übernehmen
-    const originalHeaders = new Headers(request.headers);
-    originalHeaders.forEach((value, key) => {
-      if (!['host', 'origin', 'referer'].includes(key.toLowerCase())) {
-        headers.set(key, value);
-      }
-    });
   }
 
   if (token && !isDirectPathRequest && !isJoynRelated) {
@@ -161,7 +139,6 @@ async function handleRequest(event) {
 
   let response;
   try {
-    console.log(`Proxying to: ${targetUrl.toString()}`);
     response = await fetch(targetUrl.toString(), init);
   } catch (err) {
     return new Response("Fetch error: " + err.message, { status: 502 });
@@ -169,27 +146,12 @@ async function handleRequest(event) {
 
   const contentType = response.headers.get("content-type") || "";
   
-  // Spezielle Behandlung für RSC Responses
-  if (url.search.includes('_rsc=') && response.headers.get('content-type')?.includes('text/x-component')) {
-    const newHeaders = new Headers(response.headers);
-    newHeaders.set('Access-Control-Allow-Origin', '*');
-    newHeaders.set('Access-Control-Allow-Methods', 'GET, HEAD, POST, PUT, DELETE, OPTIONS');
-    newHeaders.set('Access-Control-Allow-Headers', 'Content-Type, Authorization, *');
-    
-    const body = await response.arrayBuffer();
-    return new Response(body, {
-      status: response.status,
-      statusText: response.statusText,
-      headers: newHeaders,
-    });
-  }
-  
   if (contentType.includes("text/html") && !isDirectPathRequest) {
     // HTML Inhalt - umfassende Modifikation
     let body = await response.text();
     
     // Base URL setzen
-    const baseHref = `<base href="${joynBase}/">`;
+    const baseHref = `<base href="${baseDomain}/">`;
     if (body.includes('<head>')) {
       body = body.replace('<head>', `<head>${baseHref}`);
     } else if (body.includes('<head ')) {
@@ -200,7 +162,7 @@ async function handleRequest(event) {
     body = body.replace(
       /(href|src|action)=["'](\/[^"']*)["']/gi,
       (match, attr, path) => {
-        const fullUrl = joynBase + path;
+        const fullUrl = baseDomain + path;
         return `${attr}="${proxyBase}${encodeURIComponent(fullUrl)}"`;
       }
     );
@@ -210,7 +172,9 @@ async function handleRequest(event) {
       /(href|src|action)=["']((?!https?:\/\/|data:)([^"':][^"']*))["']/gi,
       (match, attr, path) => {
         if (path.startsWith('/')) return match;
-        const fullUrl = joynBase + '/' + path;
+        const basePath = targetUrl.pathname.endsWith('/') ? targetUrl.pathname : 
+                         targetUrl.pathname.split('/').slice(0, -1).join('/') + '/';
+        const fullUrl = baseDomain + basePath + path;
         return `${attr}="${proxyBase}${encodeURIComponent(fullUrl)}"`;
       }
     );
@@ -219,10 +183,115 @@ async function handleRequest(event) {
     body = body.replace(
       /url\(['"]?(\/[^)'"]*)['"]?\)/gi,
       (match, path) => {
-        const fullUrl = joynBase + path;
+        const fullUrl = baseDomain + path;
         return `url("${proxyBase}${encodeURIComponent(fullUrl)}")`;
       }
     );
+
+    // 4. JavaScript patchen
+    body = body.replace(
+      /<script\b[^>]*>[\s\S]*?<\/script>/gi,
+      (match) => {
+        if (match.includes('src=')) {
+          return match.replace(
+            /src=["']([^"']*)["']/gi,
+            (srcMatch, srcPath) => {
+              if (srcPath.startsWith('http')) {
+                return srcMatch;
+              }
+              const fullUrl = srcPath.startsWith('/') ? baseDomain + srcPath : 
+                             baseDomain + '/' + srcPath;
+              return `src="${proxyBase}${encodeURIComponent(fullUrl)}"`;
+            }
+          );
+        }
+        return match;
+      }
+    );
+
+    // 5. Meta Tags für Security anpassen
+    body = body.replace(
+      /<meta[^>]*content-security-policy[^>]*>/gi,
+      '' // CSP entfernen
+    );
+
+    // 6. Erweiterter Fix Script
+    const fixScript = `
+    <script>
+    // Erweiterter Fix für alle URL-Probleme
+    (function() {
+      const proxyBase = '${proxyBase}';
+      const joynBase = '${baseDomain}';
+      
+      // History API Fix
+      const originalReplaceState = history.replaceState;
+      const originalPushState = history.pushState;
+      
+      history.replaceState = function(state, title, url) {
+        try {
+          return originalReplaceState.call(this, state, title, url);
+        } catch (e) {
+          console.warn('History API blocked, using fallback');
+          return originalReplaceState.call(this, state, title, window.location.pathname);
+        }
+      };
+      
+      history.pushState = function(state, title, url) {
+        try {
+          return originalPushState.call(this, state, title, url);
+        } catch (e) {
+          console.warn('History API blocked, using fallback');
+          return originalPushState.call(this, state, title, window.location.pathname);
+        }
+      };
+      
+      // Fetch API Wrapper
+      const originalFetch = window.fetch;
+      window.fetch = function(resource, init) {
+        if (typeof resource === 'string') {
+          // Relative URLs zu absoluten Joyn URLs machen
+          if (resource.startsWith('/')) {
+            resource = joynBase + resource;
+          }
+          // Durch Proxy leiten wenn nicht bereits proxy URL
+          if (!resource.startsWith('${url.origin}') && resource.startsWith('http')) {
+            resource = proxyBase + encodeURIComponent(resource);
+          }
+        }
+        return originalFetch.call(this, resource, init);
+      };
+      
+      // XMLHttpRequest Wrapper
+      const originalXHROpen = XMLHttpRequest.prototype.open;
+      XMLHttpRequest.prototype.open = function(method, url, async, user, password) {
+        if (url && typeof url === 'string') {
+          // Relative URLs zu absoluten Joyn URLs machen
+          if (url.startsWith('/')) {
+            url = joynBase + url;
+          }
+          // Durch Proxy leiten wenn nicht bereits proxy URL
+          if (!url.startsWith('${url.origin}') && url.startsWith('http')) {
+            url = proxyBase + encodeURIComponent(url);
+          }
+        }
+        return originalXHROpen.call(this, method, url, async, user, password);
+      };
+      
+      // Event Listener für Links die nicht durch Proxy gehen
+      document.addEventListener('click', function(e) {
+        const link = e.target.closest('a');
+        if (link && link.href && link.href.startsWith('${baseDomain}') && !link.href.startsWith('${url.origin}')) {
+          e.preventDefault();
+          const proxyUrl = proxyBase + encodeURIComponent(link.href);
+          window.location.href = proxyUrl;
+        }
+      });
+    })();
+    </script>
+    `;
+
+    // Fix Script in head einfügen
+    body = body.replace('</head>', `${fixScript}</head>`);
 
     // Response erstellen
     const newHeaders = new Headers(response.headers);
@@ -244,7 +313,7 @@ async function handleRequest(event) {
     });
     
   } else {
-    // Andere Content-Types (JSON, CSS, JS, RSC, etc.)
+    // Andere Content-Types (JSON, CSS, JS, etc.)
     const newHeaders = new Headers(response.headers);
     newHeaders.delete('X-Frame-Options');
     newHeaders.delete('Content-Security-Policy');
