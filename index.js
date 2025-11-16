@@ -1,8 +1,31 @@
-// Cloudflare Worker: Enhanced Proxy with DOM Rewriting
-// Fixed version for JavaScript History API and CORS issues
+// Cloudflare Worker: Enhanced Proxy with Joyn API Headers
+// Automatically adds all required Joyn headers for API requests
 
 // ⚙️ Dein API Token hier eintragen:
 const token = "nG6o2LHug8Sbqo2dy7MdE1T1OHzobu5d";
+
+// Joyn API Headers Konfiguration
+const JOYN_HEADERS = {
+  'accept': '*/*',
+  'accept-language': 'de-DE,de;q=0.9,en-US;q=0.8,en;q=0.7',
+  'authorization': 'Bearer eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCIsImtpZCI6ImEwZDQwYjkxZTA2OGEzY2ZhODQ1ZjRkZTViNmY3NjA2NmEzMzc3NTEifQ.eyJqSWQiOiJERVBSRUNBVEVEIiwiaklkQyI6IkpOQUEtZTNkYmUwYjYtMGFiNi01ZGE2LWI0MGEtNmRiZjYzMGMzM2M2IiwicElkQyI6IkRFUFJFQ0FURUQiLCJjSWQiOiJkYjc5MWM4Zi0zOTA0LTQ5OWMtOWIzYi00YjE0MjM5YTM3ZDQiLCJpbnRlcm5hbCI6ZmFsc2UsImVsaWdpYmxlRm9yRW1wbG95ZWVTdWJzY3JpcHRpb24iOmZhbHNlLCJkaXN0cmlidXRpb25fdGVuYW50IjoiSk9ZTiIsImlhdCI6MTc2MjU1NTAzMywiZXhwIjoxNzYyNjQxNDMzLCJhdWQiOlsid2ViIl0sImlzcyI6Imh0dHBzOi8vYXV0aC5qb3luLmRlIiwic3ViIjoiZTIzMDM3N2QtOTg1ZS00MTg1LTg1MmItMzVjYWUyYzRjNmRkIn0.PIZaMlVQ2j614D38ieIS4NxGquIpoiKhb0LBQ8vr7PBjUj_-1iT9Tdutc93YMTNEWzbWuyQiGGuN3kR22xO47I4j3gnsIhT5IvAIt2EKd4WG1nCxrZGsxlhXZfFspp7sJ_heIhhYF407nQqv_aAP72E3fISAoF6HzxUTyiOsHRKxgz9sHme5f2KUaHfPhUYdVIB2bWBmYlsnliI-y--elDnsIB-0nHFzh5c8X8iSjQ0RKVWR5oTqfaTuYpMTH7nnLokjx3KNiiwbjAEuWV5-c3iwaSbXJ5JNtJgZ2fIu7ShWR81mD4JoEqVph0VOKGfSVcJGxVgyuKBJHXfPvaVEy24m9e3NrtSHcn-JiewmBbVMe7i2MtRTF1YkTY-kbTPXJaOerC5UFq7Km5m6plGtk42d3o6mzdumKEUhv1TzVg7PTTJUygztipBmCa9lT8CJ9KdaLFUtHPChSU69j_3-9uSSQAZv8vkZZlbALzi6hqzoRHdmgm3Wtvc_hsD7GB1Zqj4du5C9Gv4at6Frr4b7hZLAANqS38s-Xk9SKAiTAZ1LU2ASAypDqzTS18TFM5Le-NhobGFd5R1RbHbcS2rBAXnFYgMajSmwyTBfcOndhUNUozqbK9fiA5y6SffNEldMmDek3ZXkec7UPM_7pVYjicVqyIuIHtBuGZ9Kn3LGFTs',
+  'content-type': 'application/json',
+  'joyn-client-version': '5.1313.0',
+  'joyn-country': 'DE',
+  'joyn-distribution-tenant': 'JOYN',
+  'joyn-platform': 'web',
+  'joyn-user-state': 'code=A_A',
+  'origin': 'https://www.joyn.de',
+  'priority': 'u=1, i',
+  'sec-ch-ua': '"Chromium";v="142", "Google Chrome";v="142", "Not_A Brand";v="99"',
+  'sec-ch-ua-mobile': '?0',
+  'sec-ch-ua-platform': '"Windows"',
+  'sec-fetch-dest': 'empty',
+  'sec-fetch-mode': 'cors',
+  'sec-fetch-site': 'same-site',
+  'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36',
+  'x-api-key': '4f0fd9f18abbe3cf0e87fdb556bc39c8'
+};
 
 addEventListener("fetch", event => {
   event.respondWith(handleRequest(event));
@@ -60,7 +83,7 @@ async function handleRequest(event) {
     
     if (!target || !target.startsWith("http")) {
       return new Response(
-        "Usage:\n  https://dein-worker.workers.dev/?url=https://ziel-url.com\n\nEnhanced Proxy with DOM rewriting",
+        "Usage:\n  https://dein-worker.workers.dev/?url=https://ziel-url.com\n\nEnhanced Proxy with Joyn API headers",
         { status: 400, headers: { "Content-Type": "text/plain" } }
       );
     }
@@ -73,9 +96,28 @@ async function handleRequest(event) {
   headers.delete("Referer");
   headers.set("Host", targetUrl.host);
   headers.set("Accept", "application/json,text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8");
-  headers.set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36");
 
-  if (token && !isDirectResourceRequest) {
+  // Joyn API Headers hinzufügen für Joyn-Domains
+  const isJoynDomain = targetUrl.hostname.includes('joyn.de') || 
+                       targetUrl.hostname.includes('auth.joyn.de') ||
+                       targetUrl.hostname.includes('api.joyn.de');
+
+  if (isJoynDomain) {
+    // Alle Joyn-Header hinzufügen
+    for (const [key, value] of Object.entries(JOYN_HEADERS)) {
+      headers.set(key, value);
+    }
+    
+    // Speziell für Auth-Endpoints
+    if (targetUrl.pathname.includes('/auth/')) {
+      headers.set('content-type', 'application/json');
+    }
+  } else {
+    // Standard User-Agent für andere Domains
+    headers.set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36");
+  }
+
+  if (token && !isDirectResourceRequest && !isJoynDomain) {
     headers.set("Authorization", `Bearer ${token}`);
   }
 
@@ -146,13 +188,12 @@ async function handleRequest(event) {
     body = body.replace(
       /<script\b[^>]*>[\s\S]*?<\/script>/gi,
       (match) => {
-        // Nur externe Scripts patchen
         if (match.includes('src=')) {
           return match.replace(
             /src=["']([^"']*)["']/gi,
             (srcMatch, srcPath) => {
               if (srcPath.startsWith('http')) {
-                return srcMatch; // Absolute URL unverändert
+                return srcMatch;
               }
               const fullUrl = srcPath.startsWith('/') ? targetUrl.origin + srcPath : 
                              targetUrl.origin + '/' + srcPath;
@@ -184,7 +225,6 @@ async function handleRequest(event) {
           return originalReplaceState.call(this, state, title, url);
         } catch (e) {
           console.warn('History API blocked:', e);
-          // Fallback ohne URL-Change
           return originalReplaceState.call(this, state, title, undefined);
         }
       };
@@ -194,7 +234,6 @@ async function handleRequest(event) {
           return originalPushState.call(this, state, title, url);
         } catch (e) {
           console.warn('History API blocked:', e);
-          // Fallback ohne URL-Change
           return originalPushState.call(this, state, title, undefined);
         }
       };
