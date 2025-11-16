@@ -1,6 +1,5 @@
 // Cloudflare Worker: Enhanced Auth-CORS Proxy with Iframe Support
-// Funktion: Leitet Anfragen an externe APIs weiter, entfernt Sicherheitsheaders
-// und korrigiert relative URLs für iframe-Einbettung
+// Fixed version for relative URLs and Next.js assets
 
 // ⚙️ Dein API Token hier eintragen:
 const token = "nG6o2LHug8Sbqo2dy7MdE1T1OHzobu5d";
@@ -25,17 +24,40 @@ async function handleRequest(event) {
     });
   }
 
-  const target = decodeURIComponent(url.search.slice(1));
+  // Check if this is a resource request (starts with /_next, /static, etc.)
+  const isResourceRequest = url.pathname.startsWith('/_next') || 
+                           url.pathname.startsWith('/static') ||
+                           url.pathname.startsWith('/images') ||
+                           url.pathname.startsWith('/assets') ||
+                           url.pathname.match(/\.(css|js|svg|png|jpg|jpeg|gif|ico|woff|woff2|ttf|eot)$/);
 
-  if (!target || !target.startsWith("http")) {
-    return new Response(
-      "Usage:\n  https://dein-worker.workers.dev/?https://ziel-url.com/api\n\nEnhanced Features:\n- Removes X-Frame-Options & CSP\n- Fixes relative URLs\n- CORS enabled",
-      { status: 400, headers: { "Content-Type": "text/plain" } }
-    );
+  let targetUrl;
+  
+  if (isResourceRequest) {
+    // Für Resource-Requests: Verwende den Referer um die originale Domain zu finden
+    const referer = request.headers.get('referer');
+    if (referer) {
+      const refererUrl = new URL(referer);
+      const originalTarget = decodeURIComponent(refererUrl.search.slice(1));
+      if (originalTarget && originalTarget.startsWith('http')) {
+        const baseUrl = new URL(originalTarget);
+        targetUrl = new URL(url.pathname + url.search, baseUrl.origin);
+      }
+    }
   }
 
-  const targetUrl = new URL(target);
-  
+  // Falls kein Resource-Request oder kein Referer gefunden, verwende den normalen Query-Parameter
+  if (!targetUrl) {
+    const target = decodeURIComponent(url.search.slice(1));
+    if (!target || !target.startsWith("http")) {
+      return new Response(
+        "Usage:\n  https://dein-worker.workers.dev/?https://ziel-url.com\n\nFor resources: Automatically uses referer to construct full URL",
+        { status: 400, headers: { "Content-Type": "text/plain" } }
+      );
+    }
+    targetUrl = new URL(target);
+  }
+
   // Ursprüngliche Headers übernehmen
   const headers = new Headers(request.headers);
   
@@ -47,7 +69,7 @@ async function handleRequest(event) {
   headers.set("Accept", "application/json,text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8");
   
   // Authorization Header falls Token vorhanden
-  if (token) {
+  if (token && !isResourceRequest) {
     headers.set("Authorization", `Bearer ${token}`);
   }
 
@@ -63,7 +85,7 @@ async function handleRequest(event) {
 
   let response;
   try {
-    response = await fetch(target, init);
+    response = await fetch(targetUrl.toString(), init);
   } catch (err) {
     return new Response("Fetch error: " + err.message, { status: 502 });
   }
@@ -71,24 +93,25 @@ async function handleRequest(event) {
   // Response verarbeiten basierend auf Content-Type
   const contentType = response.headers.get("content-type") || "";
   
-  if (contentType.includes("text/html") || contentType.includes("text/css")) {
-    // HTML/CSS Inhalt - relative URLs korrigieren
+  if (contentType.includes("text/html")) {
+    // HTML Inhalt - relative URLs korrigieren
     let body = await response.text();
     
-    // Relative URLs in absolute URLs umwandeln
+    // Base URL für alle relativen Links setzen
+    const baseHref = `<base href="${targetUrl.origin}/">`;
+    body = body.replace(/<head[^>]*>/, `$&${baseHref}`);
+    
+    // Alle relativen URLs in absolute URLs umwandeln
     body = body.replace(
       /(href|src|action)=["'](\/[^"']*)["']/gi,
-      `$1="${
-        targetUrl.origin + 
-        (targetUrl.pathname.endsWith('/') ? targetUrl.pathname.slice(0, -1) : 
-         targetUrl.pathname.includes('.') ? targetUrl.pathname.split('/').slice(0, -1).join('/') || '' : 
-         targetUrl.pathname)
-      }$2"`
+      (match, attr, path) => {
+        return `${attr}="${targetUrl.origin}${path}"`;
+      }
     );
     
-    // URLs ohne führenden Slash
+    // URLs ohne führenden Slash (relative Pfade)
     body = body.replace(
-      /(href|src|action)=["']((?!https?:\/\/)[^"':][^"']*)["']/gi,
+      /(href|src|action)=["']((?!https?:\/\/|data:)([^"':][^"']*))["']/gi,
       (match, attr, path) => {
         if (path.startsWith('/')) return match;
         const basePath = targetUrl.pathname.endsWith('/') ? targetUrl.pathname : 
@@ -97,7 +120,7 @@ async function handleRequest(event) {
       }
     );
 
-    // CSS URLs korrigieren
+    // CSS URLs in HTML korrigieren
     body = body.replace(
       /url\(['"]?(\/[^)'"]*)['"]?\)/gi,
       `url("${targetUrl.origin}$1")`
@@ -127,8 +150,40 @@ async function handleRequest(event) {
       headers: newHeaders,
     });
     
+  } else if (contentType.includes("text/css")) {
+    // CSS Dateien - URLs korrigieren
+    let body = await response.text();
+    
+    // Relative URLs in CSS
+    body = body.replace(
+      /url\(['"]?(\/[^)'"]*)['"]?\)/gi,
+      `url("${targetUrl.origin}$1")`
+    );
+    
+    body = body.replace(
+      /url\(['"]?((?!https?:\/\/|data:)([^)'"]*))['"]?\)/gi,
+      (match, path) => {
+        if (path.startsWith('/')) return match;
+        const basePath = targetUrl.pathname.endsWith('/') ? targetUrl.pathname : 
+                         targetUrl.pathname.split('/').slice(0, -1).join('/') + '/';
+        return `url("${targetUrl.origin}${basePath}${path}")`;
+      }
+    );
+
+    const newHeaders = new Headers(response.headers);
+    newHeaders.delete('X-Frame-Options');
+    newHeaders.delete('Content-Security-Policy');
+    newHeaders.set('Access-Control-Allow-Origin', '*');
+    newHeaders.set('Content-Type', 'text/css');
+
+    return new Response(body, {
+      status: response.status,
+      statusText: response.statusText,
+      headers: newHeaders,
+    });
+    
   } else {
-    // Andere Content-Types (JSON, etc.) - nur Headers anpassen
+    // Andere Content-Types (JSON, Bilder, JS, etc.)
     const newHeaders = new Headers(response.headers);
     
     // Sicherheitsheaders entfernen
