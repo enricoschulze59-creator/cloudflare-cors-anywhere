@@ -1,5 +1,5 @@
-// Cloudflare Worker: Enhanced Auth-CORS Proxy with Iframe Support
-// Fixed version for all resource requests
+// Cloudflare Worker: Enhanced Proxy with DOM Rewriting
+// Fixed version for JavaScript History API and CORS issues
 
 // ⚙️ Dein API Token hier eintragen:
 const token = "nG6o2LHug8Sbqo2dy7MdE1T1OHzobu5d";
@@ -24,7 +24,7 @@ async function handleRequest(event) {
     });
   }
 
-  // Check if this is a direct resource request (path starts with /_next, /static, etc.)
+  // Check if this is a direct resource request
   const isDirectResourceRequest = url.pathname.startsWith('/_next') || 
                                   url.pathname.startsWith('/static') ||
                                   url.pathname.startsWith('/images') ||
@@ -35,17 +35,15 @@ async function handleRequest(event) {
   let targetUrl;
   
   if (isDirectResourceRequest) {
-    // Für direkte Resource-Requests: Verwende den Referer um die originale Domain zu finden
+    // Für direkte Resource-Requests
     const referer = request.headers.get('referer');
     if (referer) {
       try {
         const refererUrl = new URL(referer);
-        // Extrahiere die originale Ziel-URL aus dem Referer Query Parameter
         const originalTarget = decodeURIComponent(refererUrl.searchParams.get('url') || refererUrl.search.slice(1));
         
         if (originalTarget && originalTarget.startsWith('http')) {
           const baseUrl = new URL(originalTarget);
-          // Konstruiere die vollständige URL für die Resource
           targetUrl = new URL(url.pathname + url.search, baseUrl.origin);
         } else {
           return new Response("Cannot determine target URL from referer", { status: 400 });
@@ -57,40 +55,30 @@ async function handleRequest(event) {
       return new Response("No referer header for resource request", { status: 400 });
     }
   } else {
-    // Normale Proxy-Anfrage mit Query Parameter
+    // Normale Proxy-Anfrage
     const target = url.searchParams.get('url') || decodeURIComponent(url.search.slice(1));
     
     if (!target || !target.startsWith("http")) {
       return new Response(
-        "Usage:\n  https://dein-worker.workers.dev/?url=https://ziel-url.com\n\nFor resources: Automatically uses referer to construct full URL",
+        "Usage:\n  https://dein-worker.workers.dev/?url=https://ziel-url.com\n\nEnhanced Proxy with DOM rewriting",
         { status: 400, headers: { "Content-Type": "text/plain" } }
       );
     }
     targetUrl = new URL(target);
   }
 
-  // Ursprüngliche Headers übernehmen
+  // Request vorbereiten
   const headers = new Headers(request.headers);
-  
-  // Origin und Referer Header für die Zielseite anpassen
   headers.delete("Origin");
   headers.delete("Referer");
-  
-  // Setze korrekten Host header
   headers.set("Host", targetUrl.host);
-
-  // Eigene Header erzwingen
   headers.set("Accept", "application/json,text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8");
-  
-  // User-Agent setzen
-  headers.set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36");
-  
-  // Authorization Header falls Token vorhanden und nicht für Ressourcen
+  headers.set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36");
+
   if (token && !isDirectResourceRequest) {
     headers.set("Authorization", `Bearer ${token}`);
   }
 
-  // Request an Ziel weiterleiten
   const init = {
     method: request.method,
     headers,
@@ -107,75 +95,146 @@ async function handleRequest(event) {
     return new Response("Fetch error: " + err.message, { status: 502 });
   }
 
-  // Response verarbeiten basierend auf Content-Type
   const contentType = response.headers.get("content-type") || "";
   
   if (contentType.includes("text/html") && !isDirectResourceRequest) {
-    // HTML Inhalt - relative URLs korrigieren
+    // HTML Inhalt - umfassende Modifikation
     let body = await response.text();
     
-    // Base URL für alle relativen Links setzen
+    // Base URL setzen
     const baseHref = `<base href="${targetUrl.origin}/">`;
     if (body.includes('<head>')) {
       body = body.replace('<head>', `<head>${baseHref}`);
     } else if (body.includes('<head ')) {
       body = body.replace(/<head[^>]*>/, `$&${baseHref}`);
     }
-    
-    // Alle relativen URLs in absolute URLs umwandeln, die durch den Proxy gehen
+
+    // Proxy Base URL
     const proxyBase = `${url.origin}/?url=`;
     
-    // href, src, action attributes
+    // 1. Alle Resource-URLs durch Proxy leiten
     body = body.replace(
       /(href|src|action)=["'](\/[^"']*)["']/gi,
       (match, attr, path) => {
-        // Für bekannte Resource-Pfade, durch den Proxy leiten
-        if (path.startsWith('/_next/') || path.startsWith('/static/') || path.match(/\.(css|js|svg|png|jpg|jpeg|gif|ico|woff|woff2)$/)) {
-          return `${attr}="${proxyBase}${encodeURIComponent(targetUrl.origin + path)}"`;
-        }
-        return `${attr}="${targetUrl.origin}${path}"`;
+        const fullUrl = targetUrl.origin + path;
+        return `${attr}="${proxyBase}${encodeURIComponent(fullUrl)}"`;
       }
     );
-    
-    // URLs ohne führenden Slash (relative Pfade)
+
+    // 2. Relative Pfade
     body = body.replace(
       /(href|src|action)=["']((?!https?:\/\/|data:)([^"':][^"']*))["']/gi,
       (match, attr, path) => {
         if (path.startsWith('/')) return match;
         const basePath = targetUrl.pathname.endsWith('/') ? targetUrl.pathname : 
                          targetUrl.pathname.split('/').slice(0, -1).join('/') + '/';
-        const fullPath = targetUrl.origin + basePath + path;
-        
-        // Für bekannte Resource-Typen durch Proxy leiten
-        if (path.match(/\.(css|js|svg|png|jpg|jpeg|gif|ico|woff|woff2)$/)) {
-          return `${attr}="${proxyBase}${encodeURIComponent(fullPath)}"`;
-        }
-        return `${attr}="${fullPath}"`;
+        const fullUrl = targetUrl.origin + basePath + path;
+        return `${attr}="${proxyBase}${encodeURIComponent(fullUrl)}"`;
       }
     );
 
-    // CSS URLs in HTML korrigieren
+    // 3. CSS URLs
     body = body.replace(
       /url\(['"]?(\/[^)'"]*)['"]?\)/gi,
       (match, path) => {
-        return `url("${proxyBase}${encodeURIComponent(targetUrl.origin + path)}")`;
+        const fullUrl = targetUrl.origin + path;
+        return `url("${proxyBase}${encodeURIComponent(fullUrl)}")`;
       }
     );
 
-    // Response mit korrigiertem Body erstellen
+    // 4. JavaScript patchen für History API Probleme
+    body = body.replace(
+      /<script\b[^>]*>[\s\S]*?<\/script>/gi,
+      (match) => {
+        // Nur externe Scripts patchen
+        if (match.includes('src=')) {
+          return match.replace(
+            /src=["']([^"']*)["']/gi,
+            (srcMatch, srcPath) => {
+              if (srcPath.startsWith('http')) {
+                return srcMatch; // Absolute URL unverändert
+              }
+              const fullUrl = srcPath.startsWith('/') ? targetUrl.origin + srcPath : 
+                             targetUrl.origin + '/' + srcPath;
+              return `src="${proxyBase}${encodeURIComponent(fullUrl)}"`;
+            }
+          );
+        }
+        return match;
+      }
+    );
+
+    // 5. Meta Tags für Security anpassen
+    body = body.replace(
+      /<meta[^>]*content-security-policy[^>]*>/gi,
+      '' // CSP entfernen
+    );
+
+    // 6. Window.name Script injizieren um Origin Probleme zu lösen
+    const fixScript = `
+    <script>
+    // Fix für History API und Origin Probleme
+    (function() {
+      // Proxy für History API
+      const originalReplaceState = history.replaceState;
+      const originalPushState = history.pushState;
+      
+      history.replaceState = function(state, title, url) {
+        try {
+          return originalReplaceState.call(this, state, title, url);
+        } catch (e) {
+          console.warn('History API blocked:', e);
+          // Fallback ohne URL-Change
+          return originalReplaceState.call(this, state, title, undefined);
+        }
+      };
+      
+      history.pushState = function(state, title, url) {
+        try {
+          return originalPushState.call(this, state, title, url);
+        } catch (e) {
+          console.warn('History API blocked:', e);
+          // Fallback ohne URL-Change
+          return originalPushState.call(this, state, title, undefined);
+        }
+      };
+      
+      // Fetch API wrapper für CORS
+      const originalFetch = window.fetch;
+      window.fetch = function(resource, init) {
+        if (typeof resource === 'string' && !resource.startsWith('${url.origin}')) {
+          // Durch Proxy leiten
+          const proxyUrl = '${proxyBase}' + encodeURIComponent(resource);
+          return originalFetch.call(this, proxyUrl, init);
+        }
+        return originalFetch.call(this, resource, init);
+      };
+      
+      // XMLHttpRequest wrapper
+      const originalXHROpen = XMLHttpRequest.prototype.open;
+      XMLHttpRequest.prototype.open = function(method, url, async, user, password) {
+        if (url && !url.startsWith('${url.origin}') && !url.startsWith('blob:') && !url.startsWith('data:')) {
+          // Durch Proxy leiten
+          url = '${proxyBase}' + encodeURIComponent(url);
+        }
+        return originalXHROpen.call(this, method, url, async, user, password);
+      };
+    })();
+    </script>
+    `;
+
+    // Fix Script in head einfügen
+    body = body.replace('</head>', `${fixScript}</head>`);
+
+    // Response erstellen
     const newHeaders = new Headers(response.headers);
-    
-    // Sicherheitsheaders entfernen für iframe
     newHeaders.delete('X-Frame-Options');
     newHeaders.delete('Content-Security-Policy');
     newHeaders.delete('Frame-Options');
-    
-    // CORS-Header hinzufügen
     newHeaders.set('Access-Control-Allow-Origin', '*');
     newHeaders.set('Access-Control-Allow-Methods', 'GET, HEAD, POST, PUT, DELETE, OPTIONS');
     newHeaders.set('Access-Control-Allow-Headers', 'Content-Type, Authorization, *');
-    
-    // Content-Type sicherstellen
+
     if (!newHeaders.has('Content-Type')) {
       newHeaders.set('Content-Type', contentType);
     }
@@ -187,11 +246,10 @@ async function handleRequest(event) {
     });
     
   } else if (contentType.includes("text/css") && !isDirectResourceRequest) {
-    // CSS Dateien - URLs korrigieren
+    // CSS Dateien
     let body = await response.text();
     const proxyBase = `${url.origin}/?url=`;
     
-    // Relative URLs in CSS
     body = body.replace(
       /url\(['"]?(\/[^)'"]*)['"]?\)/gi,
       (match, path) => {
@@ -221,16 +279,44 @@ async function handleRequest(event) {
       headers: newHeaders,
     });
     
-  } else {
-    // Andere Content-Types (JSON, Bilder, JS, etc.) - Direkte Antwort
-    const newHeaders = new Headers(response.headers);
+  } else if (contentType.includes("application/javascript") && !isDirectResourceRequest) {
+    // JavaScript Dateien - CORS Fehler beheben
+    let body = await response.text();
     
-    // Sicherheitsheaders entfernen
+    // Fetch API calls patchen
+    body = body.replace(
+      /fetch\((['"])(https?:\/\/[^'"]+)\1/gi,
+      (match, quote, fetchUrl) => {
+        return `fetch(${quote}${url.origin}/?url=${encodeURIComponent(fetchUrl)}${quote}`;
+      }
+    );
+    
+    // XMLHttpRequest patchen
+    body = body.replace(
+      /\.open\((['"])(GET|POST|PUT|DELETE|PATCH)\1\s*,\s*(['"])(https?:\/\/[^'"]+)\3/gi,
+      (match, methodQuote, method, urlQuote, xhrUrl) => {
+        return `.open(${methodQuote}${method}${methodQuote}, ${urlQuote}${url.origin}/?url=${encodeURIComponent(xhrUrl)}${urlQuote}`;
+      }
+    );
+
+    const newHeaders = new Headers(response.headers);
+    newHeaders.delete('X-Frame-Options');
+    newHeaders.delete('Content-Security-Policy');
+    newHeaders.set('Access-Control-Allow-Origin', '*');
+    newHeaders.set('Content-Type', 'application/javascript');
+
+    return new Response(body, {
+      status: response.status,
+      statusText: response.statusText,
+      headers: newHeaders,
+    });
+    
+  } else {
+    // Andere Content-Types
+    const newHeaders = new Headers(response.headers);
     newHeaders.delete('X-Frame-Options');
     newHeaders.delete('Content-Security-Policy');
     newHeaders.delete('Frame-Options');
-    
-    // CORS-Header hinzufügen
     newHeaders.set('Access-Control-Allow-Origin', '*');
     newHeaders.set('Access-Control-Allow-Methods', 'GET, HEAD, POST, PUT, DELETE, OPTIONS');
     newHeaders.set('Access-Control-Allow-Headers', 'Content-Type, Authorization, *');
