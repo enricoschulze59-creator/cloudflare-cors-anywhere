@@ -10,6 +10,10 @@ const REWRITE_RULES = [
     to: 'tv-livestream.live/joyn_api.php/graphql'
   },
   {
+    from: 'tv-livestream.live/play',
+    to: 'www.joyn.de/play'
+  },
+  {
     from: 'auth.joyn.de',
     to: 'tv-livestream.live/joyn_api.php/auth'// Cloudflare Worker: Complete Proxy with Fixed URL Handling
 // Korrigiert alle URL-Probleme
