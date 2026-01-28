@@ -1,6 +1,6 @@
 // Cloudflare Worker: Enhanced Auth-CORS Proxy with Iframe Support
 // by ChatGPT (GPT-5)
-// Funktion: Leitet Anfragen an externe APIs weiter, entfernt Sicherheitsheaders
+// Funktion: Leitet Anfragen an externe APIs weiter, entfernt Sicherheitsheader
 // und korrigiert relative URLs für iframe-Einbettung
 
 // ⚙️ Dein API Token hier eintragen:
@@ -72,97 +72,145 @@ async function handleRequest(event) {
   // Response verarbeiten basierend auf Content-Type
   const contentType = response.headers.get("content-type") || "";
   
-  if (contentType.includes("text/html") || contentType.includes("text/css")) {
-    // HTML/CSS Inhalt - relative URLs korrigieren
+  if (contentType.includes("text/html") || contentType.includes("text/css") || contentType.includes("application/javascript")) {
+    // HTML/CSS/JS Inhalt - relative URLs korrigieren
     let body = await response.text();
     
-    // Basis-URL für relative Pfade extrahieren
-    const getBasePath = (url) => {
-      const urlObj = new URL(url);
+    // Helper-Funktion zum Ermitteln der Basis-URL
+    const getBaseUrl = (urlString) => {
+      const urlObj = new URL(urlString);
       const path = urlObj.pathname;
       
-      // Wenn die URL auf eine Datei endet (mit Erweiterung), gehe ein Verzeichnis zurück
-      if (path.includes('.')) {
+      // Wenn der Pfad ein Datei-Pfad ist (mit Erweiterung)
+      const hasFileExtension = path.match(/\.(html|htm|php|asp|aspx|jsp|js|css|xml|json|txt|pdf|doc|xls|jpg|jpeg|png|gif|svg|ico)$/i);
+      
+      if (hasFileExtension) {
+        // Gehe ein Verzeichnis zurück
         const lastSlashIndex = path.lastIndexOf('/');
         if (lastSlashIndex > 0) {
-          return path.substring(0, lastSlashIndex + 1);
+          return `${urlObj.origin}${path.substring(0, lastSlashIndex)}/`;
+        } else {
+          return `${urlObj.origin}/`;
+        }
+      } else {
+        // Ist wahrscheinlich ein Verzeichnis
+        if (path.endsWith('/')) {
+          return `${urlObj.origin}${path}`;
+        } else {
+          return `${urlObj.origin}${path}/`;
         }
       }
-      // Andernfalls, wenn die URL auf einen Slash endet, behalte sie
-      return path.endsWith('/') ? path : path + '/';
     };
     
-    const basePath = getBasePath(targetUrl.toString());
-    const baseUrl = targetUrl.origin + basePath;
+    // Helper-Funktion zum Resolven von relativen URLs
+    const resolveUrl = (baseUrl, relativePath) => {
+      if (relativePath.startsWith('http://') || relativePath.startsWith('https://') || 
+          relativePath.startsWith('//') || relativePath.startsWith('#')) {
+        return relativePath;
+      }
+      
+      const base = new URL(baseUrl);
+      
+      if (relativePath.startsWith('/')) {
+        // Absolute Pfade
+        return `${base.origin}${relativePath}`;
+      }
+      
+      // Relative Pfade
+      let basePath = base.pathname;
+      
+      // Wenn basePath nicht mit / endet, gehe ein Verzeichnis zurück
+      if (!basePath.endsWith('/')) {
+        const lastSlashIndex = basePath.lastIndexOf('/');
+        basePath = lastSlashIndex > 0 ? basePath.substring(0, lastSlashIndex + 1) : '/';
+      }
+      
+      // ../ und ./ Pfade auflösen
+      const parts = relativePath.split('/');
+      const baseParts = basePath.split('/').filter(p => p !== '');
+      
+      for (const part of parts) {
+        if (part === '..') {
+          if (baseParts.length > 0) {
+            baseParts.pop();
+          }
+        } else if (part !== '.' && part !== '') {
+          baseParts.push(part);
+        }
+      }
+      
+      return `${base.origin}/${baseParts.join('/')}`;
+    };
     
-    console.log('Target URL:', targetUrl.toString());
-    console.log('Base path:', basePath);
-    console.log('Base URL:', baseUrl);
+    const baseUrl = getBaseUrl(targetUrl.toString());
     
-    // Korrektur für absolute Pfade (mit führendem /)
+    // 1. Absolute Pfade (mit führendem /)
     body = body.replace(
-      /(href|src|action)=["'](\/[^"']*)["']/gi,
+      /(href|src|action|data-src|data-url)=["'](\/[^"']*)["']/gi,
       (match, attr, path) => {
-        // Für absolute Pfade einfach die Origin verwenden
+        // Ignoriere URLs, die bereits vollständig sind oder mit anderen Protokollen beginnen
+        if (path.match(/^(https?:)?\/\//)) {
+          return match;
+        }
         return `${attr}="${targetUrl.origin}${path}"`;
       }
     );
     
-    // Korrektur für relative Pfade (ohne führendes /)
+    // 2. Relative Pfade (ohne führendes /) - aber nicht Data URLs oder Anchors
     body = body.replace(
-      /(href|src|action)=["']((?!(https?:)?\/\/)[^"':][^"']*)["']/gi,
+      /(href|src|action|data-src|data-url)=["']((?!(https?:)?\/\/|data:|#)[^"':][^"']*)["']/gi,
       (match, attr, path) => {
-        // Wenn der Pfad bereits mit http:// oder https:// beginnt, unverändert lassen
-        if (path.startsWith('http://') || path.startsWith('https://')) {
+        // Überspringe leere Pfade oder Self-References
+        if (!path || path === '.' || path === './') {
           return match;
         }
         
-        // Für relative Pfade die Basis-URL verwenden
-        if (path.startsWith('./')) {
-          // ./file.js -> baseUrl + file.js
-          return `${attr}="${baseUrl}${path.substring(2)}"`;
-        } else if (path.startsWith('../')) {
-          // Komplexe Logik für ../ Pfade
-          let relativePath = path;
-          let currentBase = basePath;
-          
-          while (relativePath.startsWith('../')) {
-            // Ein Verzeichnis zurück gehen
-            currentBase = currentBase.substring(0, currentBase.lastIndexOf('/', currentBase.length - 2)) + '/';
-            relativePath = relativePath.substring(3);
-          }
-          
-          return `${attr}="${targetUrl.origin}${currentBase}${relativePath}"`;
-        } else if (!path.startsWith('/')) {
-          // Einfache relative Pfade
-          return `${attr}="${baseUrl}${path}"`;
-        }
-        
-        return match;
-      }
-    );
-
-    // CSS URLs korrigieren
-    body = body.replace(
-      /url\(['"]?(\/[^)'"]*)['"]?\)/gi,
-      (match, path) => {
-        return `url("${targetUrl.origin}${path}")`;
+        const resolved = resolveUrl(baseUrl, path);
+        return `${attr}="${resolved}"`;
       }
     );
     
-    // CSS relative URLs
+    // 3. CSS URLs in url()
     body = body.replace(
-      /url\(['"]?((?!(https?:)?\/\/)[^)'"]*)['"]?\)/gi,
+      /url\(['"]?([^)'"]*)['"]?\)/gi,
       (match, path) => {
-        if (path.startsWith('http://') || path.startsWith('https://') || path.startsWith('data:') || path.startsWith('#')) {
+        // Überspringe Data URLs, absolute URLs, und spezielle Werte
+        if (path.startsWith('data:') || path.startsWith('http://') || 
+            path.startsWith('https://') || path.startsWith('//') ||
+            path.startsWith('#') || path === 'none' || path === 'inherit') {
           return match;
         }
         
         if (path.startsWith('/')) {
           return `url("${targetUrl.origin}${path}")`;
         } else {
-          return `url("${baseUrl}${path}")`;
+          const resolved = resolveUrl(baseUrl, path);
+          return `url("${resolved}")`;
         }
+      }
+    );
+    
+    // 4. Spezielle Fälle: srcset in Bildern
+    body = body.replace(
+      /srcset=["']([^"']+)["']/gi,
+      (match, srcset) => {
+        const parts = srcset.split(',').map(part => {
+          const trimmed = part.trim();
+          const [url, descriptor] = trimmed.split(/\s+/);
+          
+          if (!url || url.startsWith('data:') || url.startsWith('http://') || 
+              url.startsWith('https://') || url.startsWith('//')) {
+            return trimmed;
+          }
+          
+          const resolvedUrl = url.startsWith('/') 
+            ? `${targetUrl.origin}${url}`
+            : resolveUrl(baseUrl, url);
+            
+          return descriptor ? `${resolvedUrl} ${descriptor}` : resolvedUrl;
+        });
+        
+        return `srcset="${parts.join(', ')}"`;
       }
     );
 
