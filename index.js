@@ -79,8 +79,9 @@ async function handleRequest(event) {
     // Basis-URL für relative Pfade extrahieren
     const getBasePath = (url) => {
       const urlObj = new URL(url);
-      const path = urlObj.pathname;
-      
+      var path = urlObj.pathname;
+          path = path.replace('/tracking','');
+            
       // Wenn die URL auf eine Datei endet (mit Erweiterung), gehe ein Verzeichnis zurück
       if (path.includes('.')) {
         const lastSlashIndex = path.lastIndexOf('/');
