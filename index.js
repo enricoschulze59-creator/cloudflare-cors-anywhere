@@ -79,9 +79,8 @@ async function handleRequest(event) {
     // Basis-URL für relative Pfade extrahieren
     const getBasePath = (url) => {
       const urlObj = new URL(url);
-      var path = urlObj.pathname;
-          path = path.replace('/tracking','');
-            
+      const path = urlObj.pathname;
+      
       // Wenn die URL auf eine Datei endet (mit Erweiterung), gehe ein Verzeichnis zurück
       if (path.includes('.')) {
         const lastSlashIndex = path.lastIndexOf('/');
@@ -105,7 +104,7 @@ async function handleRequest(event) {
       /(href|src|action)=["'](\/[^"']*)["']/gi,
       (match, attr, path) => {
         // Für absolute Pfade einfach die Origin verwenden
-        return `${attr}="${targetUrl.origin}"`;
+        return `${attr}="${targetUrl.origin}${path}"`;
       }
     );
     
