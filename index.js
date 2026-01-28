@@ -76,32 +76,94 @@ async function handleRequest(event) {
     // HTML/CSS Inhalt - relative URLs korrigieren
     let body = await response.text();
     
-    // Relative URLs in absolute URLs umwandeln
+    // Basis-URL für relative Pfade extrahieren
+    const getBasePath = (url) => {
+      const urlObj = new URL(url);
+      const path = urlObj.pathname;
+      
+      // Wenn die URL auf eine Datei endet (mit Erweiterung), gehe ein Verzeichnis zurück
+      if (path.includes('.')) {
+        const lastSlashIndex = path.lastIndexOf('/');
+        if (lastSlashIndex > 0) {
+          return path.substring(0, lastSlashIndex + 1);
+        }
+      }
+      // Andernfalls, wenn die URL auf einen Slash endet, behalte sie
+      return path.endsWith('/') ? path : path + '/';
+    };
+    
+    const basePath = getBasePath(targetUrl.toString());
+    const baseUrl = targetUrl.origin + basePath;
+    
+    console.log('Target URL:', targetUrl.toString());
+    console.log('Base path:', basePath);
+    console.log('Base URL:', baseUrl);
+    
+    // Korrektur für absolute Pfade (mit führendem /)
     body = body.replace(
       /(href|src|action)=["'](\/[^"']*)["']/gi,
-      `$1="${
-        targetUrl.origin + 
-        (targetUrl.pathname.endsWith('/') ? targetUrl.pathname.slice(0, -1) : 
-         targetUrl.pathname.includes('.') ? targetUrl.pathname.split('/').slice(0, -1).join('/') || '' : 
-         targetUrl.pathname)
-      }$2"`
+      (match, attr, path) => {
+        // Für absolute Pfade einfach die Origin verwenden
+        return `${attr}="${targetUrl.origin}${path}"`;
+      }
     );
     
-    // URLs ohne führenden Slash
+    // Korrektur für relative Pfade (ohne führendes /)
     body = body.replace(
-      /(href|src|action)=["']((?!https?:\/\/)[^"':][^"']*)["']/gi,
+      /(href|src|action)=["']((?!(https?:)?\/\/)[^"':][^"']*)["']/gi,
       (match, attr, path) => {
-        if (path.startsWith('/')) return match;
-        const basePath = targetUrl.pathname.endsWith('/') ? targetUrl.pathname : 
-                         targetUrl.pathname.split('/').slice(0, -1).join('/') + '/';
-        return `${attr}="${targetUrl.origin}${basePath}${path}"`;
+        // Wenn der Pfad bereits mit http:// oder https:// beginnt, unverändert lassen
+        if (path.startsWith('http://') || path.startsWith('https://')) {
+          return match;
+        }
+        
+        // Für relative Pfade die Basis-URL verwenden
+        if (path.startsWith('./')) {
+          // ./file.js -> baseUrl + file.js
+          return `${attr}="${baseUrl}${path.substring(2)}"`;
+        } else if (path.startsWith('../')) {
+          // Komplexe Logik für ../ Pfade
+          let relativePath = path;
+          let currentBase = basePath;
+          
+          while (relativePath.startsWith('../')) {
+            // Ein Verzeichnis zurück gehen
+            currentBase = currentBase.substring(0, currentBase.lastIndexOf('/', currentBase.length - 2)) + '/';
+            relativePath = relativePath.substring(3);
+          }
+          
+          return `${attr}="${targetUrl.origin}${currentBase}${relativePath}"`;
+        } else if (!path.startsWith('/')) {
+          // Einfache relative Pfade
+          return `${attr}="${baseUrl}${path}"`;
+        }
+        
+        return match;
       }
     );
 
     // CSS URLs korrigieren
     body = body.replace(
       /url\(['"]?(\/[^)'"]*)['"]?\)/gi,
-      `url("${targetUrl.origin}$1")`
+      (match, path) => {
+        return `url("${targetUrl.origin}${path}")`;
+      }
+    );
+    
+    // CSS relative URLs
+    body = body.replace(
+      /url\(['"]?((?!(https?:)?\/\/)[^)'"]*)['"]?\)/gi,
+      (match, path) => {
+        if (path.startsWith('http://') || path.startsWith('https://') || path.startsWith('data:') || path.startsWith('#')) {
+          return match;
+        }
+        
+        if (path.startsWith('/')) {
+          return `url("${targetUrl.origin}${path}")`;
+        } else {
+          return `url("${baseUrl}${path}")`;
+        }
+      }
     );
 
     // Response mit korrigiertem Body erstellen
