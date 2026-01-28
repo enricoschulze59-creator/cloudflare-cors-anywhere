@@ -105,7 +105,7 @@ async function handleRequest(event) {
       /(href|src|action)=["'](\/[^"']*)["']/gi,
       (match, attr, path) => {
         // Für absolute Pfade einfach die Origin verwenden
-        return `${attr}="${targetUrl.origin}${path}"`;
+        return `${attr}="${targetUrl.origin}"`;
       }
     );
     
