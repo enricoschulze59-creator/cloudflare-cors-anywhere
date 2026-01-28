@@ -128,7 +128,7 @@ async function handleRequest(event) {
           
           while (relativePath.startsWith('../')) {
             // Ein Verzeichnis zurück gehen
-            currentBase = currentBase.substring(0, currentBase.lastIndexOf('/', currentBase.length - 3)) + '/';
+            currentBase = currentBase.substring(0, currentBase.lastIndexOf('/', currentBase.length - 2)) + '/';
             relativePath = relativePath.substring(3);
           }
           
