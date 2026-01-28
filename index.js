@@ -120,7 +120,7 @@ async function handleRequest(event) {
         // Für relative Pfade die Basis-URL verwenden
         if (path.startsWith('./')) {
           // ./file.js -> baseUrl + file.js
-          return `${attr}="${baseUrl}${path.substring(3)}"`;
+          return `${attr}="${baseUrl}${path.substring(2)}"`;
         } else if (path.startsWith('../')) {
           // Komplexe Logik für ../ Pfade
           let relativePath = path;
@@ -128,7 +128,7 @@ async function handleRequest(event) {
           
           while (relativePath.startsWith('../')) {
             // Ein Verzeichnis zurück gehen
-            currentBase = currentBase.substring(0, currentBase.lastIndexOf('/', currentBase.length - 2)) + '/';
+            currentBase = currentBase.substring(0, currentBase.lastIndexOf('/', currentBase.length - 3)) + '/';
             relativePath = relativePath.substring(3);
           }
           
