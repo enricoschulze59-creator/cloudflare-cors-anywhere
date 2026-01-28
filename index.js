@@ -1,4 +1,9 @@
-// Cloudflare Worker: Simplified Root-based URL resolver
+// Cloudflare Worker: Enhanced Auth-CORS Proxy with Iframe Support
+// by ChatGPT (GPT-5)
+// Funktion: Leitet Anfragen an externe APIs weiter, entfernt Sicherheitsheaders
+// und korrigiert relative URLs für iframe-Einbettung
+
+// ⚙️ Dein API Token hier eintragen:
 const token = "nG6o2LHug8Sbqo2dy7MdE1T1OHzobu5d";
 
 addEventListener("fetch", event => {
@@ -9,6 +14,7 @@ async function handleRequest(event) {
   const request = event.request;
   const url = new URL(request.url);
   
+  // OPTIONS Request für Preflight handling
   if (request.method === "OPTIONS") {
     return new Response(null, {
       headers: {
@@ -24,24 +30,29 @@ async function handleRequest(event) {
 
   if (!target || !target.startsWith("http")) {
     return new Response(
-      "Usage: https://dein-worker.workers.dev/?https://ziel-url.com\n\nFeatures:\n- Removes security headers\n- Fixes URLs to root\n- CORS enabled",
+      "Usage:\n  https://dein-worker.workers.dev/?https://ziel-url.com/api\n\nEnhanced Features:\n- Removes X-Frame-Options & CSP\n- Fixes relative URLs\n- CORS enabled",
       { status: 400, headers: { "Content-Type": "text/plain" } }
     );
   }
 
   const targetUrl = new URL(target);
   
-  // Headers
+  // Ursprüngliche Headers übernehmen
   const headers = new Headers(request.headers);
+  
+  // Origin Header für die Zielseite entfernen (CORS Vermeidung)
   headers.delete("Origin");
   headers.delete("Referer");
-  headers.set("Accept", "*/*");
+
+  // Eigene Header erzwingen
+  headers.set("Accept", "application/json,text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8");
   
+  // Authorization Header falls Token vorhanden
   if (token) {
     headers.set("Authorization", `Bearer ${token}`);
   }
 
-  // Fetch
+  // Request an Ziel weiterleiten
   const init = {
     method: request.method,
     headers,
@@ -58,107 +69,117 @@ async function handleRequest(event) {
     return new Response("Fetch error: " + err.message, { status: 502 });
   }
 
+  // Response verarbeiten basierend auf Content-Type
   const contentType = response.headers.get("content-type") || "";
   
-  // Nur HTML, CSS, JS transformieren
-  if (contentType.includes("text/html") || contentType.includes("text/css") || 
-      contentType.includes("javascript") || contentType.includes("application/javascript")) {
-    
+  if (contentType.includes("text/html") || contentType.includes("text/css")) {
+    // HTML/CSS Inhalt - relative URLs korrigieren
     let body = await response.text();
-    const origin = targetUrl.origin; // z.B. "https://www.maersk.com"
     
-    // EINFACHE LOGIK: ALLE Pfade vom Root auflösen
-    const fixAllUrls = (urlString) => {
-      // Ignoriere bereits vollständige URLs und spezielle URLs
-      if (urlString.startsWith('http://') || urlString.startsWith('https://') || 
-          urlString.startsWith('//') || urlString.startsWith('data:') || 
-          urlString.startsWith('#') || urlString.startsWith('mailto:') ||
-          urlString.startsWith('tel:') || urlString.startsWith('javascript:')) {
-        return urlString;
-      }
+    // Basis-URL für relative Pfade extrahieren
+    const getBasePath = (url) => {
+      const urlObj = new URL(url);
+      const path = urlObj.pathname;
       
-      // Absolute Pfade (beginnen mit /)
-      if (urlString.startsWith('/')) {
-        return origin + urlString;
-      }
-      
-      // Wenn es mit ./ beginnt, entferne das ./
-      if (urlString.startsWith('./')) {
-        return origin + '/' + urlString.substring(2);
-      }
-      
-      // Wenn es mit ../ beginnt, vom Root auflösen (ignoriere die ..)
-      if (urlString.startsWith('../')) {
-        let path = urlString;
-        while (path.startsWith('../')) {
-          path = path.substring(3);
+      // Wenn die URL auf eine Datei endet (mit Erweiterung), gehe ein Verzeichnis zurück
+      if (path.includes('.')) {
+        const lastSlashIndex = path.lastIndexOf('/');
+        if (lastSlashIndex > 0) {
+          return path.substring(0, lastSlashIndex + 1);
         }
-        return origin + '/' + path;
       }
-      
-      // Einfache relative Pfade
-      return origin + '/' + urlString;
+      // Andernfalls, wenn die URL auf einen Slash endet, behalte sie
+      return path.endsWith('/') ? path : path + '/';
     };
     
-    // 1. Alle href, src, action Attribute
+    const basePath = getBasePath(targetUrl.toString());
+    const baseUrl = targetUrl.origin + basePath;
+    
+    console.log('Target URL:', targetUrl.toString());
+    console.log('Base path:', basePath);
+    console.log('Base URL:', baseUrl);
+    
+    // Korrektur für absolute Pfade (mit führendem /)
     body = body.replace(
-      /(href|src|action|data-src|data-href)=["']([^"']*)["']/gi,
-      (match, attr, url) => {
-        return `${attr}="${fixAllUrls(url)}"`;
+      /(href|src|action)=["'](\/[^"']*)["']/gi,
+      (match, attr, path) => {
+        // Für absolute Pfade einfach die Origin verwenden
+        return `${attr}="${targetUrl.origin}${path}"`;
       }
     );
     
-    // 2. CSS url()
+    // Korrektur für relative Pfade (ohne führendes /)
     body = body.replace(
-      /url\(['"]?([^)'"]*)['"]?\)/gi,
-      (match, url) => {
-        // Spezielle Werte nicht ändern
-        if (url.startsWith('data:') || url.startsWith('http') || 
-            url.startsWith('//') || url === 'none' || url === 'inherit' ||
-            url === 'initial' || url === 'unset') {
+      /(href|src|action)=["']((?!(https?:)?\/\/)[^"':][^"']*)["']/gi,
+      (match, attr, path) => {
+        // Wenn der Pfad bereits mit http:// oder https:// beginnt, unverändert lassen
+        if (path.startsWith('http://') || path.startsWith('https://')) {
           return match;
         }
-        return `url("${fixAllUrls(url)}")`;
-      }
-    );
-    
-    // 3. srcset (für responsive Bilder)
-    body = body.replace(
-      /srcset=["']([^"']+)["']/gi,
-      (match, srcset) => {
-        const parts = srcset.split(',').map(part => {
-          const trimmed = part.trim();
-          const segments = trimmed.split(/\s+/);
+        
+        // Für relative Pfade die Basis-URL verwenden
+        if (path.startsWith('./')) {
+          // ./file.js -> baseUrl + file.js
+          return `${attr}="${baseUrl}${path.substring(2)}"`;
+        } else if (path.startsWith('../')) {
+          // Komplexe Logik für ../ Pfade
+          let relativePath = path;
+          let currentBase = basePath;
           
-          if (segments.length === 0) return trimmed;
-          
-          const fixedUrl = fixAllUrls(segments[0]);
-          if (segments.length > 1) {
-            return [fixedUrl, ...segments.slice(1)].join(' ');
+          while (relativePath.startsWith('../')) {
+            // Ein Verzeichnis zurück gehen
+            currentBase = currentBase.substring(0, currentBase.lastIndexOf('/', currentBase.length - 2)) + '/';
+            relativePath = relativePath.substring(3);
           }
-          return fixedUrl;
-        });
-        return `srcset="${parts.join(', ')}"`;
-      }
-    );
-    
-    // 4. Meta refresh und andere URLs
-    body = body.replace(
-      /content=["']\d+;\s*url=([^"']*)["']/gi,
-      (match, url) => {
-        return `content="0; url=${fixAllUrls(url)}"`;
+          
+          return `${attr}="${targetUrl.origin}${currentBase}${relativePath}"`;
+        } else if (!path.startsWith('/')) {
+          // Einfache relative Pfade
+          return `${attr}="${baseUrl}${path}"`;
+        }
+        
+        return match;
       }
     );
 
-    // Response Header
+    // CSS URLs korrigieren
+    body = body.replace(
+      /url\(['"]?(\/[^)'"]*)['"]?\)/gi,
+      (match, path) => {
+        return `url("${targetUrl.origin}${path}")`;
+      }
+    );
+    
+    // CSS relative URLs
+    body = body.replace(
+      /url\(['"]?((?!(https?:)?\/\/)[^)'"]*)['"]?\)/gi,
+      (match, path) => {
+        if (path.startsWith('http://') || path.startsWith('https://') || path.startsWith('data:') || path.startsWith('#')) {
+          return match;
+        }
+        
+        if (path.startsWith('/')) {
+          return `url("${targetUrl.origin}${path}")`;
+        } else {
+          return `url("${baseUrl}${path}")`;
+        }
+      }
+    );
+
+    // Response mit korrigiertem Body erstellen
     const newHeaders = new Headers(response.headers);
+    
+    // Sicherheitsheaders entfernen für iframe
     newHeaders.delete('X-Frame-Options');
     newHeaders.delete('Content-Security-Policy');
     newHeaders.delete('Frame-Options');
+    
+    // CORS-Header hinzufügen
     newHeaders.set('Access-Control-Allow-Origin', '*');
     newHeaders.set('Access-Control-Allow-Methods', 'GET, HEAD, POST, PUT, DELETE, OPTIONS');
     newHeaders.set('Access-Control-Allow-Headers', 'Content-Type, Authorization, *');
     
+    // Content-Type sicherstellen
     if (!newHeaders.has('Content-Type')) {
       newHeaders.set('Content-Type', contentType);
     }
@@ -170,16 +191,21 @@ async function handleRequest(event) {
     });
     
   } else {
-    // Binary data oder andere Typen
+    // Andere Content-Types (JSON, etc.) - nur Headers anpassen
     const newHeaders = new Headers(response.headers);
+    
+    // Sicherheitsheaders entfernen
     newHeaders.delete('X-Frame-Options');
     newHeaders.delete('Content-Security-Policy');
     newHeaders.delete('Frame-Options');
+    
+    // CORS-Header hinzufügen
     newHeaders.set('Access-Control-Allow-Origin', '*');
     newHeaders.set('Access-Control-Allow-Methods', 'GET, HEAD, POST, PUT, DELETE, OPTIONS');
     newHeaders.set('Access-Control-Allow-Headers', 'Content-Type, Authorization, *');
 
     const body = await response.arrayBuffer();
+
     return new Response(body, {
       status: response.status,
       statusText: response.statusText,
