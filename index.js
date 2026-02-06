@@ -3,9 +3,6 @@
 // Funktion: Leitet Anfragen an externe APIs weiter, entfernt Sicherheitsheaders
 // und korrigiert relative URLs für iframe-Einbettung
 
-// ⚙️ Dein API Token hier eintragen:
-const token = "nG6o2LHug8Sbqo2dy7MdE1T1OHzobu5d";
-
 addEventListener("fetch", event => {
   event.respondWith(handleRequest(event));
 });
@@ -46,11 +43,6 @@ async function handleRequest(event) {
 
   // Eigene Header erzwingen
   headers.set("Accept", "application/json,text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8");
-  
-  // Authorization Header falls Token vorhanden
-  if (token) {
-    headers.set("Authorization", `Bearer ${token}`);
-  }
 
   // Request an Ziel weiterleiten
   const init = {
